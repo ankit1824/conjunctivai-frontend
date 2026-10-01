@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
-import { fetchMetrics, fetchRocData } from '../hooks/useApi'
+import { fetchMetrics, fetchRocData, healthCheck } from '../hooks/useApi'
 import { MetricsResponse, RocDataResponse } from '../types'
-import { Loader2, AlertTriangle } from 'lucide-react'
+import { Loader2, Wifi, WifiOff } from 'lucide-react'
 
 const MODEL_ORDER = ['xgboost', 'rf', 'svm', 'knn', 'gnb']
 const COLORS: Record<string, string> = {
@@ -20,15 +20,13 @@ const METRIC_LABELS: Record<string, string> = {
   f1:           'F1',
   specificity:  'Specificity',
   roc_auc:      'ROC-AUC',
-  train_time_s: 'Train (s)',
   infer_time_ms:'Infer (ms)',
 }
 
 function pct(v: number) { return (v * 100).toFixed(2) + '%' }
 
-function MetricCell({ value, key }: { value: number; key: string }) {
-  if (key === 'train_time_s') return <span className="font-mono text-xs">{value.toFixed(1)}s</span>
-  if (key === 'infer_time_ms') return <span className="font-mono text-xs">{value.toFixed(3)}ms</span>
+function MetricCell({ value, metricKey }: { value: number; metricKey: string }) {
+  if (metricKey === 'infer_time_ms') return <span className="font-mono text-xs">{value.toFixed(3)}ms</span>
   const pct_val = value * 100
   const color = pct_val >= 80 ? '#3fb950' : pct_val >= 65 ? '#d29922' : '#f85149'
   return <span className="font-mono text-xs" style={{ color }}>{pct(value)}</span>
@@ -38,12 +36,15 @@ export default function Compare() {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
   const [roc, setRoc] = useState<RocDataResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [backendLive, setBackendLive] = useState<boolean | null>(null)
 
   useEffect(() => {
-    Promise.all([fetchMetrics(), fetchRocData()])
-      .then(([m, r]) => { setMetrics(m); setRoc(r) })
-      .catch(() => setError('Could not load metrics. Make sure the backend is running and train.py has been executed.'))
+    Promise.all([fetchMetrics(), fetchRocData(), healthCheck()])
+      .then(([m, r, alive]) => {
+        setMetrics(m)
+        setRoc(r)
+        setBackendLive(alive)
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -53,16 +54,7 @@ export default function Compare() {
     </div>
   )
 
-  if (error) return (
-    <div className="max-w-2xl mx-auto px-6 py-10">
-      <div className="flex items-start gap-2 text-red bg-red/10 border border-red/20 rounded-lg px-4 py-3 text-sm">
-        <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-        {error}
-      </div>
-    </div>
-  )
-
-  // Build ROC chart data — sample to 200 pts per model
+  // Build ROC chart data
   const rocChartData: any[] = []
   if (roc) {
     const n = 200
@@ -77,54 +69,73 @@ export default function Compare() {
     rocChartData.sort((a, b) => a.fpr - b.fpr)
   }
 
+  const bestKey = metrics
+    ? Object.entries(metrics).reduce((b, [k, v]) => v.accuracy > (metrics[b]?.accuracy || 0) ? k : b, 'xgboost')
+    : 'rf'
+
   return (
     <div className="max-w-5xl mx-auto px-6 py-10 space-y-12">
-      <div>
-        <h1 className="text-2xl font-bold text-white mb-1">Model Comparison</h1>
-        <p className="text-muted text-sm">All metrics computed on a held-out test set of genuinely unseen patient source IDs (zero leakage). Positive class = Anemic.</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-white mb-1">Model Comparison</h1>
+          <p className="text-muted text-sm">All metrics on a leakage-free test set of genuinely unseen patient source IDs. Positive class = Anemic.</p>
+        </div>
+        {backendLive !== null && (
+          <div className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full ${
+            backendLive
+              ? 'bg-green/10 text-green border border-green/20'
+              : 'bg-surface2 text-dim border border-border'
+          }`}>
+            {backendLive
+              ? <><Wifi className="w-3 h-3" /> Live backend</>
+              : <><WifiOff className="w-3 h-3" /> Showing pre-computed results</>
+            }
+          </div>
+        )}
       </div>
 
       {/* Metrics table */}
-      <div>
-        <div className="text-xs text-dim font-semibold uppercase tracking-wider mb-4">Test Set Metrics</div>
-        <div className="overflow-x-auto card">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="text-left px-4 py-3 text-xs font-semibold text-dim uppercase tracking-wider">Model</th>
-                {Object.keys(METRIC_LABELS).map(k => (
-                  <th key={k} className="text-right px-4 py-3 text-xs font-semibold text-dim uppercase tracking-wider whitespace-nowrap">
-                    {METRIC_LABELS[k]}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {metrics && MODEL_ORDER.map((key, idx) => {
-                const m = metrics[key]
-                if (!m) return null
-                const best = Object.entries(metrics).reduce((b, [k, v]) => v.accuracy > (metrics[b]?.accuracy || 0) ? k : b, 'xgboost')
-                return (
-                  <tr key={key} className={`border-b border-border/50 hover:bg-surface2/50 ${idx === 0 ? '' : ''}`}>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[key] }} />
-                        <span className="font-medium text-white text-sm">{m.name}</span>
-                        {key === best && <span className="tag text-[10px] bg-yellow/15 text-yellow ml-1">Best</span>}
-                      </div>
-                    </td>
-                    {Object.keys(METRIC_LABELS).map(mk => (
-                      <td key={mk} className="px-4 py-3 text-right">
-                        <MetricCell value={(m as any)[mk]} key={mk} />
+      {metrics && (
+        <div>
+          <div className="text-xs text-dim font-semibold uppercase tracking-wider mb-4">Test Set Metrics</div>
+          <div className="overflow-x-auto card">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-dim uppercase tracking-wider">Model</th>
+                  {Object.keys(METRIC_LABELS).map(k => (
+                    <th key={k} className="text-right px-4 py-3 text-xs font-semibold text-dim uppercase tracking-wider whitespace-nowrap">
+                      {METRIC_LABELS[k]}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {MODEL_ORDER.map(key => {
+                  const m = metrics[key]
+                  if (!m) return null
+                  return (
+                    <tr key={key} className="border-b border-border/50 hover:bg-surface2/50">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[key] }} />
+                          <span className="font-medium text-white text-sm">{m.name}</span>
+                          {key === bestKey && <span className="tag text-[10px] bg-yellow/15 text-yellow ml-1">Best</span>}
+                        </div>
                       </td>
-                    ))}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                      {Object.keys(METRIC_LABELS).map(mk => (
+                        <td key={mk} className="px-4 py-3 text-right">
+                          <MetricCell value={(m as any)[mk]} metricKey={mk} />
+                        </td>
+                      ))}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Confusion matrices */}
       {metrics && (
@@ -189,7 +200,7 @@ export default function Compare() {
       <div className="card p-5 border-yellow/30">
         <div className="text-xs font-semibold text-yellow uppercase tracking-wider mb-2">📋 Why our accuracy is lower than the paper</div>
         <p className="text-sm text-muted leading-relaxed">
-          The reference paper (Jayanth & Aneetha, 2025) reports 99% accuracy using a CNN on the same dataset. However, their train/test split has 100% leakage — every test image is an augmented copy of a training image. Our split is grouped by source patient ID, so the test set contains genuinely unseen patients. Our numbers are honest. The Random Forest's ~78% accuracy on truly unseen patients is a meaningful, deployable result.
+          The reference paper (Jayanth &amp; Aneetha, 2025) reports 99% accuracy using a CNN on the same dataset. However, their train/test split has 100% leakage — every test image is an augmented copy of a training image. Our split is grouped by source patient ID, so the test set contains genuinely unseen patients. Our numbers are honest. The Random Forest's ~78% accuracy on truly unseen patients is a meaningful, deployable result.
         </p>
       </div>
     </div>

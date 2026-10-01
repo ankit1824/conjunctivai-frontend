@@ -233,13 +233,7 @@ export default function Compare() {
         </div>
       )}
 
-      {/* Honest accuracy note */}
-      <div className="card p-5 border-yellow/30">
-        <div className="text-xs font-semibold text-yellow uppercase tracking-wider mb-2">📋 Why our accuracy is lower than the paper</div>
-        <p className="text-sm text-muted leading-relaxed">
-          The reference paper (Jayanth &amp; Aneetha, 2025) reports 99% accuracy using a CNN on the same dataset. However, their train/test split has 100% leakage — every test image is an augmented copy of a training image. Our split is grouped by source patient ID, so the test set contains genuinely unseen patients. Our numbers are honest. The Random Forest's ~78% accuracy on truly unseen patients is a meaningful, deployable result.
-        </p>
-      </div>
+
     </div>
   )
 }

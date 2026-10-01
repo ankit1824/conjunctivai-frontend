@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { PredictResponse, MetricsResponse, RocDataResponse } from '../types'
 
-const API = (import.meta as any).env?.VITE_API_URL || 'https://conjunctivai-backend-a3wl.onrender.com'
+const API = ((import.meta as any).env?.VITE_API_URL || 'https://conjunctivai-backend-a3wl.onrender.com').replace(/\/+$/, '')
 
 // ── Static fallback data (embedded at build time) ─────────────────────────────
 // Used when backend is unreachable so Compare page always works.

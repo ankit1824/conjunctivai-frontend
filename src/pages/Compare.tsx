@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { fetchMetrics, fetchRocData, healthCheck } from '../hooks/useApi'
 import { MetricsResponse, RocDataResponse } from '../types'
 import { Loader2, Wifi, WifiOff } from 'lucide-react'
@@ -54,19 +54,32 @@ export default function Compare() {
     </div>
   )
 
-  // Build ROC chart data
+  // Build ROC chart data — one unified array where every row has ALL model tprs at that fpr index
+  // We align by index (each model has same number of sampled points), not by fpr value,
+  // so each series is continuous and complete.
+  const ROC_SAMPLES = 100
   const rocChartData: any[] = []
   if (roc) {
-    const n = 200
-    MODEL_ORDER.forEach(key => {
-      const entry = roc[key]
-      if (!entry) return
-      const step = Math.max(1, Math.floor(entry.fpr.length / n))
-      for (let i = 0; i < entry.fpr.length; i += step) {
-        rocChartData.push({ fpr: +entry.fpr[i].toFixed(4), [`${key}_tpr`]: +entry.tpr[i].toFixed(4) })
-      }
+    // Find max sample count
+    const counts = MODEL_ORDER.map(k => roc[k]?.fpr.length || 0)
+    const maxLen = Math.max(...counts)
+    const step = Math.max(1, Math.floor(maxLen / ROC_SAMPLES))
+    // Build index list from the longest series
+    const indices: number[] = []
+    for (let i = 0; i < maxLen; i += step) indices.push(i)
+
+    indices.forEach(i => {
+      const row: any = {}
+      MODEL_ORDER.forEach(key => {
+        const entry = roc[key]
+        if (!entry) return
+        // Scale index proportionally for shorter series
+        const j = Math.min(i, entry.fpr.length - 1)
+        row[`${key}_fpr`] = +entry.fpr[j].toFixed(4)
+        row[`${key}_tpr`] = +entry.tpr[j].toFixed(4)
+      })
+      rocChartData.push(row)
     })
-    rocChartData.sort((a, b) => a.fpr - b.fpr)
   }
 
   const bestKey = metrics
@@ -166,31 +179,55 @@ export default function Compare() {
         <div>
           <div className="text-xs text-dim font-semibold uppercase tracking-wider mb-4">ROC Curves</div>
           <div className="card p-5">
-            <ResponsiveContainer width="100%" height={340}>
-              <LineChart data={rocChartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
+            <ResponsiveContainer width="100%" height={360}>
+              <ComposedChart margin={{ top: 10, right: 30, left: 10, bottom: 30 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                <XAxis dataKey="fpr" type="number" domain={[0,1]} tickCount={6}
+                <XAxis
+                  dataKey="fpr" type="number" domain={[0, 1]} tickCount={6}
                   tick={{ fill: '#8b949e', fontSize: 11 }}
-                  label={{ value: 'False Positive Rate', position: 'insideBottom', offset: -5, fill: '#8b949e', fontSize: 12 }} />
-                <YAxis domain={[0,1]} tickCount={6}
+                  label={{ value: 'False Positive Rate', position: 'insideBottom', offset: -15, fill: '#8b949e', fontSize: 12 }}
+                />
+                <YAxis
+                  dataKey="tpr" type="number" domain={[0, 1]} tickCount={6}
                   tick={{ fill: '#8b949e', fontSize: 11 }}
-                  label={{ value: 'True Positive Rate', angle: -90, position: 'insideLeft', fill: '#8b949e', fontSize: 12 }} />
+                  label={{ value: 'True Positive Rate', angle: -90, position: 'insideLeft', offset: 10, fill: '#8b949e', fontSize: 12 }}
+                />
                 <Tooltip
                   contentStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 6, fontSize: 12 }}
-                  labelStyle={{ color: '#8b949e' }}
-                  formatter={(v: any, name: string) => [v?.toFixed(3), name.replace('_tpr','')]}
+                  formatter={(v: any, name: string) => [Number(v).toFixed(3), name]}
+                  labelFormatter={() => ''}
                 />
-                <Legend wrapperStyle={{ fontSize: 12, color: '#8b949e', paddingTop: 12 }}
-                  formatter={(v) => {
-                    const key = v.replace('_tpr','')
-                    const entry = roc[key]
-                    return entry ? `${entry.name} (AUC=${entry.auc.toFixed(3)})` : v
-                  }} />
-                {MODEL_ORDER.map(key => (
-                  <Line key={key} type="monotone" dataKey={`${key}_tpr`}
-                    stroke={COLORS[key]} dot={false} strokeWidth={2} name={key} />
-                ))}
-              </LineChart>
+                <Legend
+                  wrapperStyle={{ fontSize: 12, color: '#8b949e', paddingTop: 16 }}
+                />
+                {/* Diagonal chance line */}
+                <Line
+                  data={[{ fpr: 0, tpr: 0 }, { fpr: 1, tpr: 1 }]}
+                  dataKey="tpr" type="linear"
+                  stroke="#444" strokeWidth={1} strokeDasharray="4 4"
+                  dot={false} name="Random Chance" legendType="none"
+                />
+                {MODEL_ORDER.map(key => {
+                  const entry = roc[key]
+                  if (!entry) return null
+                  const modelData = entry.fpr.map((f: number, i: number) => ({ fpr: +f.toFixed(4), tpr: +entry.tpr[i].toFixed(4) }))
+                  const label = metrics?.[key]?.name
+                    ? `${metrics[key].name} (AUC=${entry.auc.toFixed(3)})`
+                    : `${key} (AUC=${entry.auc.toFixed(3)})`
+                  return (
+                    <Line
+                      key={key}
+                      data={modelData}
+                      dataKey="tpr"
+                      type="monotone"
+                      stroke={COLORS[key]}
+                      strokeWidth={2}
+                      dot={false}
+                      name={label}
+                    />
+                  )
+                })}
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         </div>
